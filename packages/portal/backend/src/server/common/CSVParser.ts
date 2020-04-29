@@ -6,7 +6,7 @@ import {DatabaseController} from "../../controllers/DatabaseController";
 import {DeliverablesController} from "../../controllers/DeliverablesController";
 import {GradesController} from "../../controllers/GradesController";
 import {PersonController} from "../../controllers/PersonController";
-import {AuditLabel, Grade, Person, PersonKind} from "../../Types";
+import {AuditLabel, Grade} from "../../Types";
 
 export class CSVParser {
 
@@ -22,17 +22,18 @@ export class CSVParser {
      * @param {string} path
      * @returns {Promise<any[]>}
      */
-    private parsePath(path: string): Promise<any[]> {
+    public parsePath(path: string): Promise<any[]> {
         return new Promise(function(fulfill, reject) {
 
             const rs = fs.createReadStream(path);
             const options = {
                 columns:          true,
                 skip_empty_lines: true,
-                trim:             true
+                trim:             true,
+                bom:              true // fixes CSV compatibility issue
             };
 
-            const parser = parse(options, (err, data: any[]) => {
+            const parser = parse(options, (err: Error, data: any[]) => {
                 if (err) {
                     const msg = 'CSV parse error: ' + err;
                     Log.error("CSVParser::parsePath(..) - ERROR: " + msg);
@@ -47,55 +48,21 @@ export class CSVParser {
         });
     }
 
-    public async processClasslist(personId: string, path: string): Promise<Person[]> {
-        try {
-            Log.info('CSVParser::processClasslist(..) - start');
-
-            const data = await this.parsePath(path);
-            const pc = new PersonController();
-            const peoplePromises: Array<Promise<Person>> = [];
-            this.duplicateDataCheck(data, ['ACCT', 'CWL']);
-            this.missingDataCheck(data, ['ACCT', 'CWL']);
-            for (const row of data) {
-                // Log.trace(JSON.stringify(row));
-                if (typeof row.ACCT !== 'undefined' && typeof row.CWL !== 'undefined' &&
-                    typeof row.SNUM !== 'undefined' && typeof row.FIRST !== 'undefined' &&
-                    typeof row.LAST !== 'undefined' && typeof row.LAB !== 'undefined') {
-                    const p: Person = {
-                        id:            row.ACCT.toLowerCase(), // id is CSID since this cannot be changed
-                        csId:          row.ACCT.toLowerCase(),
-                        // github.ugrad.cs wanted row.ACCT; github.students.cs and github.ubc want row.CWL
-                        githubId:      row.CWL.toLowerCase(),
-                        studentNumber: row.SNUM,
-                        fName:         row.FIRST,
-                        lName:         row.LAST,
-
-                        kind:   PersonKind.STUDENT,
-                        URL:    null,
-                        labId:  row.LAB,
-                        custom: {}
-                    };
-                    peoplePromises.push(pc.createPerson(p));
-                } else {
-                    Log.info('CSVParser::processClasslist(..) - column missing from: ' + JSON.stringify(row));
-                    peoplePromises.push(Promise.reject('Required column missing (required: ACCT, CWL, SNUM, FIRST, LAST, LAB).'));
-                }
-            }
-
-            const people = await Promise.all(peoplePromises);
-
-            // audit
-            const dbc = DatabaseController.getInstance();
-            await dbc.writeAudit(AuditLabel.CLASSLIST_UPLOAD, personId, {}, {}, {numPoeple: people.length});
-
-            return people;
-        } catch (err) {
-            Log.error('CSVParser::processClasslist(..) - ERROR: ' + err.message);
-            throw new Error('Classlist upload error: ' + err.message);
-        }
-    }
-
-    public async processGrades(personId: string, delivId: string, path: string): Promise<boolean[]> {
+    /**
+     * Process grades for a given deliverable.
+     *
+     * The CSV should have three columns (each with a case-sensitive header):
+     *   * CSID
+     *   * GRADE
+     *   * COMMENT
+     *
+     * If CSID is absent but CWL or GITHUB is present, we map them to the CSID and proceed as needed.
+     *
+     * @param requestorId
+     * @param delivId
+     * @param path
+     */
+    public async processGrades(requestorId: string, delivId: string, path: string): Promise<boolean[]> {
         try {
             Log.info('CSVParser::processGrades(..) - start');
 
@@ -104,6 +71,7 @@ export class CSVParser {
             const dc = new DeliverablesController();
             const pc = new PersonController();
             const deliv = await dc.getDeliverable(delivId);
+
             if (deliv === null) {
                 throw new Error("Unknown deliverable: " + delivId);
             }
@@ -111,14 +79,33 @@ export class CSVParser {
             const gc = new GradesController();
             const gradePromises: Array<Promise<boolean>> = [];
             for (const row of data) {
+
+                if (typeof row.CSID === 'undefined' && typeof row.GITHUB !== 'undefined') {
+                    Log.trace('CSVParser::processGrades(..) - CSID absent but GITHUB present; GITHUB: ' + row.GITHUB);
+                    const person = await pc.getGitHubPerson(row.GITHUB);
+                    if (person !== null) {
+                        row.CSID = person.csId;
+                        Log.info('CSVParser::processGrades(..) - GITHUB -> CSID: ' + row.GITHUB + " -> " + row.CSID);
+                    }
+                }
+
+                if (typeof row.CSID === 'undefined' && typeof row.CWL !== 'undefined') {
+                    Log.trace('CSVParser::processGrades(..) - CSID absent but CWL present; CWL: ' + row.CWL);
+                    const person = await pc.getGitHubPerson(row.CWL); // GITHUB && CWL are the same at UBC
+                    if (person !== null) {
+                        row.CSID = person.csId;
+                        Log.info('CSVParser::processGrades(..) - CWL -> CSID: ' + row.CWL + " -> " + row.CSID);
+                    }
+                }
+
                 // Log.trace('grade row: ' + JSON.stringify(row));
                 if (typeof row.CSID !== 'undefined' &&
                     typeof row.GRADE !== 'undefined' &&
                     typeof row.COMMENT !== 'undefined') {
 
-                    const personGrade = row.CSID; // TODO: will depend on instance (see above)
+                    const personId = row.CSID;
                     const g: Grade = {
-                        personId:  personGrade,
+                        personId:  personId,
                         delivId:   delivId,
                         score:     Number(row.GRADE),
                         comment:   row.COMMENT,
@@ -128,11 +115,11 @@ export class CSVParser {
                         custom:    {}
                     };
 
-                    const person = pc.getPerson(personGrade);
+                    const person = pc.getPerson(personId);
                     if (person !== null) {
                         gradePromises.push(gc.saveGrade(g));
                     } else {
-                        Log.warn('CSVParser::processGrades(..) - record ignored for: ' + personGrade + '; unknown personId');
+                        Log.warn('CSVParser::processGrades(..) - record ignored for: ' + personId + '; unknown personId');
                     }
 
                 } else {
@@ -144,67 +131,15 @@ export class CSVParser {
 
             const grades = await Promise.all(gradePromises);
 
-            // audit
+            // audit grade update
             const dbc = DatabaseController.getInstance();
-            await dbc.writeAudit(AuditLabel.GRADE_ADMIN, personId, {}, {}, {numGrades: grades.length});
+            await dbc.writeAudit(AuditLabel.GRADE_ADMIN, requestorId, {}, {}, {numGrades: grades.length});
+            Log.info('CSVParser::processGrades(..) - done; # grades: ' + grades.length);
 
             return grades;
         } catch (err) {
             Log.error('CSVParser::processGrades(..) - ERROR: ' + err.message);
             throw new Error('Grade upload error: ' + err.message);
         }
-    }
-
-    private duplicateDataCheck(data: any[], columnNames: string[]) {
-        Log.trace('CSVParser::duplicateDataCheck -- start');
-        const that = this;
-        const dupColumnData: any = {};
-        columnNames.forEach(function(column) {
-            Object.assign(dupColumnData, {[column]: that.getDuplicateRowsByColumn(data, column)});
-        });
-        columnNames.forEach(function(column) {
-            if (dupColumnData[column].length) {
-                Log.error('CSVParser::duplicateDataCheck(..) - ERROR: Duplicate Data Check Error'
-                    + JSON.stringify(dupColumnData));
-                throw new Error('Duplicate Data Check Error: ' + JSON.stringify(dupColumnData));
-            }
-        });
-    }
-
-    private getDuplicateRowsByColumn(data: any[], column: string): any[] {
-        Log.trace('CSVParser::getDuplicateRowsByColumn -- start');
-        const set = new Set();
-        return data.filter((row) => {
-            if (set.has(row[column].toLowerCase())) {
-                return true;
-            }
-            set.add(row[column].toLowerCase());
-            return false;
-        });
-    }
-
-    private getMissingDataRowsByColumn(data: any[], column: string): any[] {
-        Log.trace('CSVParser::getMissingDataRowsByColumn -- start');
-        return data.filter((row) => {
-            if (row[column] === '') {
-                return true;
-            }
-            return false;
-        });
-    }
-    private missingDataCheck(data: any[], columns: string[]) {
-        Log.trace('CSVParser::missingDataCheck -- start');
-        const that = this;
-        const missingData: any = {};
-        columns.forEach((column) => {
-            Object.assign(missingData, {[column]: that.getMissingDataRowsByColumn(data, column)});
-        });
-        columns.forEach((column) => {
-            if (missingData[column].length) {
-                Log.error('CSVParser::missingDataCheck(..) - ERROR: Certain fields cannot be empty: '
-                    + JSON.stringify(missingData));
-                throw new Error('Certain fields cannot be empty: ' + JSON.stringify(missingData));
-            }
-        });
     }
 }

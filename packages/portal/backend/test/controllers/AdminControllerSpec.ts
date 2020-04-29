@@ -3,6 +3,7 @@ import "mocha";
 
 import Config, {ConfigCourses, ConfigKey} from "../../../../common/Config";
 import Log from "../../../../common/Log";
+import {Test} from "../../../../common/TestHarness";
 import {AutoTestGradeTransport, GradeTransport, StudentTransport, TeamTransport} from "../../../../common/types/PortalTypes";
 
 import {AdminController} from "../../src/controllers/AdminController";
@@ -19,7 +20,6 @@ import {Factory} from "../../src/Factory";
 import {Person, PersonKind, Repository, Team} from "../../src/Types";
 
 import '../GlobalSpec'; // load first
-import {Test} from "../TestHarness";
 import './GradeControllerSpec'; // load first
 
 describe("AdminController", () => {
@@ -34,13 +34,11 @@ describe("AdminController", () => {
     let gha: IGitHubActions;
 
     before(async function() {
-        await Test.suiteBefore('CourseController');
+        await Test.suiteBefore('AdminController');
         await clearAndPrepareAll();
     });
 
     beforeEach(async function() {
-        Test.testBefore("CourseControllerSpec", this);
-
         gha = GitHubActions.getInstance(true);
         const ghInstance = new GitHubController(gha);
 
@@ -54,13 +52,8 @@ describe("AdminController", () => {
         dc = new DeliverablesController();
     });
 
-    afterEach(function() {
-        Test.testAfter("CourseControllerSpec", this);
-        // Log.test("CourseControllerSpec::beforeEach( " + this.currentTest.title + " )" + this.currentTest.fullTitle());
-    });
-
     after(async function() {
-        Test.suiteAfter('CourseController');
+        Test.suiteAfter('AdminController');
     });
 
     async function clearAndPrepareAll(): Promise<void> {
@@ -102,7 +95,7 @@ describe("AdminController", () => {
         await gha.deleteTeam(teamNum);
         teamNum = await gha.getTeamNumber('t_project_' + Test.GITHUB1.csId + '_' + Test.GITHUB2.csId);
         await gha.deleteTeam(teamNum);
-        teamNum = await  gha.getTeamNumber('t_project_' + Test.GITHUB3.csId);
+        teamNum = await gha.getTeamNumber('t_project_' + Test.GITHUB3.csId);
         await gha.deleteTeam(teamNum);
         teamNum = await gha.getTeamNumber(Test.TEAMNAMEREAL);
         await gha.deleteTeam(teamNum);
@@ -119,6 +112,7 @@ describe("AdminController", () => {
         const deliv = await dbc.getDeliverable(Test.DELIVIDPROJ);
         const names = await cc.computeNames(deliv, [p1, p2]);
 
+        // const t = await Test.teamCreate(names.teamName, Test.DELIVIDPROJ, [p1.id, p2.id]);
         const t = await Test.createTeam(names.teamName, Test.DELIVIDPROJ, [p1.id, p2.id]);
         await dbc.writeTeam(t);
     }
@@ -157,18 +151,21 @@ describe("AdminController", () => {
     });
 
     it("Should be able to get a list of teams.", async () => {
-        const res = await ac.getTeams();
-        expect(res).to.be.an('array');
-        expect(res.length).to.be.greaterThan(0);
+        const actual = await ac.getTeams();
+        Log.test('Actual teams: ' + JSON.stringify(actual));
+        expect(actual).to.be.an('array');
+        expect(actual.length).to.be.greaterThan(0);
 
-        Log.test('teams: ' + JSON.stringify(res));
         const t: TeamTransport = {
             id:      Test.TEAMNAME1,
             delivId: "d0",
             people:  [Test.USER1.id, Test.USER2.id],
             URL:     null
+            // repoName: null,
+            // repoUrl:  null
         };
-        expect(res).to.deep.include(t); // make sure at least one student with the right format is in there
+        Log.test('Expected team: ' + JSON.stringify(t));
+        expect(actual).to.deep.include(t); // make sure at least one student with the right format is in there
     });
 
     it("Should be able to get a list of grades.", async () => {
@@ -458,7 +455,7 @@ describe("AdminController", () => {
         expect(res.repoName).to.equal(rExpected);
     });
 
-    describe("Slow CourseController Tests", () => {
+    describe("Slow AdminController Tests", () => {
 
         // before(async function() {
         //     await clearAndPreparePartial();
@@ -467,12 +464,42 @@ describe("AdminController", () => {
         beforeEach(function() {
             const exec = Test.runSlowTest();
             if (exec) {
-                Log.test("CourseControllerSpec::slowTests - running: " + this.currentTest.title);
+                Log.test("AdminControllerSpec::slowTests - running: " + this.currentTest.title);
             } else {
-                Log.test("CourseControllerSpec::slowTests - skipping; will run on CI");
+                Log.test("AdminControllerSpec::slowTests - skipping; will run on CI");
                 this.skip();
             }
         });
+
+        // This test must be run first -- before later tests modify the database to a state where students cannot be withdrawn.
+        it("Should be able to mark students as withdrawn.", async () => {
+            const studentsBefore = await ac.getStudents();
+            let people = await pc.getAllPeople();
+
+            let numWithrdrawnBefore = 0;
+            for (const person of people) {
+                if (person.kind === PersonKind.WITHDRAWN) {
+                    numWithrdrawnBefore++;
+                }
+            }
+            expect(numWithrdrawnBefore).to.equal(0); // shouldn't have any withdrawn students before
+
+            const res = await ac.performStudentWithdraw();
+            Log.test("Result: " + JSON.stringify(res));
+            expect(res).to.be.an('string');
+
+            people = await pc.getAllPeople();
+            let numWithrdrawnAfter = 0;
+            for (const person of people) {
+                if (person.kind === PersonKind.WITHDRAWN) {
+                    numWithrdrawnAfter++;
+                }
+            }
+            expect(numWithrdrawnAfter).to.be.greaterThan(numWithrdrawnBefore);
+
+            const studentsAfter = await ac.getStudents();
+            expect(studentsBefore.length).to.be.greaterThan(studentsAfter.length); // students should not include withdrawn students
+        }).timeout(Test.TIMEOUTLONG * 5);
 
         // // broken when we switched to plan/perform provisioning
         it("Should provision repos if there are some to do and singles are disabled.", async () => {
@@ -622,35 +649,6 @@ describe("AdminController", () => {
 
             expect(allNewRepos.length).to.equal(3);
             expect(allNewTeams.length).to.equal(4); // 3x d0 & 1x project
-        }).timeout(Test.TIMEOUTLONG * 5);
-
-        it("Should be able to mark students as withdrawn.", async () => {
-            const studentsBefore = await ac.getStudents();
-            let people = await pc.getAllPeople();
-
-            let numWithrdrawnBefore = 0;
-            for (const person of people) {
-                if (person.kind === PersonKind.WITHDRAWN) {
-                    numWithrdrawnBefore++;
-                }
-            }
-            expect(numWithrdrawnBefore).to.equal(0); // shouldn't have any withdrawn students before
-
-            const res = await ac.performStudentWithdraw();
-            Log.test("Result: " + JSON.stringify(res));
-            expect(res).to.be.an('string');
-
-            people = await pc.getAllPeople();
-            let numWithrdrawnAfter = 0;
-            for (const person of people) {
-                if (person.kind === PersonKind.WITHDRAWN) {
-                    numWithrdrawnAfter++;
-                }
-            }
-            expect(numWithrdrawnAfter).to.be.greaterThan(numWithrdrawnBefore);
-
-            const studentsAfter = await ac.getStudents();
-            expect(studentsBefore.length).to.be.greaterThan(studentsAfter.length); // students should not include withdrawn students
         }).timeout(Test.TIMEOUTLONG * 5);
     });
 });
