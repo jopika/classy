@@ -8,6 +8,7 @@ import {GradesController} from "./GradesController";
 import {PersonController} from "./PersonController";
 import {RepositoryController} from "./RepositoryController";
 import {ResultsController} from "./ResultsController";
+import {ScheduleController} from "./ScheduleController";
 import {TeamController} from "./TeamController";
 
 /**
@@ -92,6 +93,9 @@ export class CourseController implements ICourseController {
     constructor(ghController: IGitHubController) {
         Log.trace("CourseController::<init>");
         this.gh = ghController;
+
+        // initialize ScheduleController by invoking it
+        ScheduleController.getInstance();
     }
 
     /**
