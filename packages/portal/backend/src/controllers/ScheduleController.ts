@@ -19,10 +19,17 @@ export class ScheduleController {
 
     private constructor() {
         Log.info(`ScheduleController::constructor() - start`);
+        this.taskList = new Map<string, Task>();
     }
 
-    public static getInstance(): ScheduleController {
-        Log.info(`ScheduleController::getInstance() - start`);
+    public static getInstance(forceInitialization: boolean = false): ScheduleController {
+        Log.info(`ScheduleController::getInstance( ${forceInitialization} ) - start`);
+
+        if (forceInitialization === true) {
+            Log.warn(`ScheduleController::getInstance(..) - TESTING ONLY! FORCING A NEW COPY OF THE SCHEDULER`);
+            Log.test(`ScheduleController::getInstance(..) - TESTING ONLY! FORCING A NEW COPY OF THE SCHEDULER`);
+            this.instance = null;
+        }
 
         if (this.instance === null) {
             Log.info(`ScheduleController::getInstance() - no previous instance, initializing`);
@@ -62,7 +69,7 @@ export class ScheduleController {
         }
 
         // check if a task already exists with given name
-        if (this.taskList.get(taskName) !== null) {
+        if (this.taskList.get(taskName) !== undefined) {
             Log.info(`ScheduleController::registerTask(..) - taskName: ${taskName} already has a mapping`);
             return false;
         }
@@ -101,7 +108,7 @@ export class ScheduleController {
 
         const task = this.taskList.get(taskName);
 
-        if (task === null) {
+        if (task === undefined) {
             return {
                 exists: false,
                 complete: false
@@ -123,7 +130,7 @@ export class ScheduleController {
         Log.info(`ScheduleController::cancelTask( ${taskName} ) - start`);
         const task = this.taskList.get(taskName);
 
-        if (task === null) {
+        if (task === undefined) {
             return false;
         }
 

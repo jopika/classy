@@ -15,7 +15,7 @@ describe("ScheduleController", () => {
     });
 
     beforeEach(() => {
-        sc = ScheduleController.getInstance();
+        sc = ScheduleController.getInstance(true);
     });
 
     after(async () => {
@@ -41,7 +41,7 @@ describe("ScheduleController", () => {
         expect(registerResult).to.be.false;
         await new Promise((resolve) => setTimeout(resolve, 1000)); // sleep for 1 second
         expect(testClosure.getInvokeCount()).to.be.eq(0);
-    });
+    }).timeout(5000);
 
     it(`Should be possible to register a task 2 seconds in the future, and have it run.`, async () => {
         const testClosure = buildTestClosure();
@@ -53,7 +53,7 @@ describe("ScheduleController", () => {
 
         await new Promise((resolve) => setTimeout(resolve, 5000)); // sleep for 5 seconds
         expect(testClosure.getInvokeCount()).to.eq(1);
-    });
+    }).timeout(10000);
 
     it(`Should be possible to schedule a task 1 hour in the future, and now have it run immediately.`, async ()  => {
         const testClosure = buildTestClosure();
@@ -67,7 +67,7 @@ describe("ScheduleController", () => {
         expect(testClosure.getInvokeCount()).to.eq(0);
         await new Promise((resolve) => setTimeout(resolve, 1000)); // sleep for 1 seconds
         expect(testClosure.getInvokeCount()).to.eq(0);
-    });
+    }).timeout(5000);
 
     it(`Should not be possible to schedule more than one task with the same name`, async () => {
         const testClosure = buildTestClosure();
@@ -145,20 +145,20 @@ describe("ScheduleController", () => {
         const testClosure = buildTestClosure();
 
         const futureTime = new Date();
-        futureTime.setHours(futureTime.getSeconds() + 2);
+        futureTime.setSeconds(futureTime.getSeconds() + 2);
 
         const registerResult = sc.registerTask(taskName, futureTime, testClosure.increment);
         expect(registerResult).to.be.true;
         expect(testClosure.getInvokeCount()).to.eq(0);
 
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await new Promise((resolve) => setTimeout(resolve, 4000));
         expect(testClosure.getInvokeCount()).to.eq(1);
 
         const taskStatus = sc.getTaskStatus(taskName);
 
         expect(taskStatus.exists).to.be.true;
         expect(taskStatus.complete).to.be.true;
-    });
+    }).timeout(10000);
 
     it(`Should be able to retrieve all tasks in the scheduler.`, async () => {
         const testClosure = buildTestClosure();
